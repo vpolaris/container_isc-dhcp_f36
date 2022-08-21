@@ -26,7 +26,7 @@ You can clone the repository or download files
 ``` sh
 git clone https://github.com/vpolaris/contenair_isc-dhcp_f36.git
 cd contenair_isc-dhcp_f36
-sudo podman build --squash-all --cap-add MKNOD -t f36:dhcpd -f ./Dockerfile . 
+sudo podman build --squash-all --cap-add MKNOD --build-arg="$(uname -m)" -t f36:dhcpd -f ./Dockerfile . 
 ```
 
 ## Usage
@@ -40,10 +40,34 @@ podman run -tid --privileged --net host \
   --cap-add SYSLOG \
   --cap-add NET_RAW \
   --cap-add SYS_CHROOT \
-  --name f36:dhcpd \
+  --name dhcpd \
+  -e IPOPT=-4 \
   --volume /etc/dhcp/dhcpd.conf:/isc-dhcpd/etc/dhcpd.conf:rw \
   -t f36:dhcpd
 
 ```
+### IPOTP role
+
+Determine which IP protocol the DHCP will supprt
+can take one of these three values:
+
+- -4 for IPV4 only (default)
+- -6 for IPV6 only
+- all for both values
+
+## Entrypoint options
+
+you can call /bin/entrypoint.sh with following arguments
+
+stop : shutdow the DHCP service without leaving the container
+start :  enable DHCP service
+restart : stop and start DHCP service
+
+### Example
+``` sh
+podman exec -ti dhcpd /bin/entrypoint.sh stop
+```
+
+
 
 
