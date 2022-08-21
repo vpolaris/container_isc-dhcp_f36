@@ -1,6 +1,4 @@
 name: Build ISC-DHCPD image
-
-
 on:
   push:
     branches: [ "main" ]
