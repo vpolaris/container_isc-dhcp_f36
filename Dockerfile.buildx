@@ -1,4 +1,5 @@
 # Usage sudo podman build --squash-all --cap-add MKNOD  -t f36:dhcpd -f ./Dockerfile.buildx .
+# Last update : 21/08/2022
 FROM fedora:36 as builder
 ARG sysroot=/mnt/sysroot
 ARG DISTVERSION=36
