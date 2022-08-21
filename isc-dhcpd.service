@@ -1,0 +1,108 @@
+#!/bin/bash
+#
+# Init Script to manage dhcpd server.
+#
+# description: this script aims to jail dhcpd process in chroot's path
+#
+# processname: dhcpd
+#set -x
+config_file='/etc/dhcpd.conf'
+pidfile='/dhcpd.pid'
+lease_file='/leasing/dhcpd.leases'
+chroot_path='/isc-dhcpd'
+user='dhcpd'
+group='dhcpd'
+
+# remove IP option as we cannot set -all for dhcpd
+if [[ "${IPOPT}" == "all" ]]; then  unset -v IPOPT;fi
+
+if [ -f /dhcpd.version ]; then
+  DHCPVERSION="$(cat /dhcpd.version)"
+fi
+
+# Source function library
+. /etc/rc.d/init.d/functions
+
+# Get network config
+. /etc/sysconfig/network
+
+  if [ ! -e $chroot_path/$config_file ]; then
+    printf " No config file at $chroot_path/$config_file\n"
+    exit 0
+  fi
+
+RETVAL=0
+
+start() {
+  if [ ! -e $chroot_path/$lease_file ]; then
+        printf "  Creating $lease_file\n"
+        touch $chroot_path/$lease_file
+
+  elif [ -f $pidfile ]; then
+        PID=$(cat $pidfile)
+        printf "ISC-DHCPD v-${DHCPVERSION} is already running: $PID\n"
+        exit 2;
+  else
+	printf "Starting ISC-DHCPD: v-${DHCPVERSION}\n"
+	daemon /usr/sbin/dhcpd ${IPOPT} -cf ${config_file} -pf ${pidfile} -lf ${lease_file} -user ${user} -group ${group} -chroot ${chroot_path}
+	RETVAL=$?
+	echo
+	[ $RETVAL -eq 0 ] && touch /var/lock/subsys/dhcpd		
+	return $RETVAL
+  fi
+}
+
+configcheck () {
+  /usr/sbin/dhcpd ${IPOPT} -t -cf $chroot_path/${config_file}
+}
+
+stop() {
+	printf $"Stopping ISC-DHCPD:\n"
+	killproc -p $chroot_path/$pidfile dhcpd
+	RETVAL=$?
+	echo
+[ $RETVAL -eq 0 ] && rm -f $chroot_path/$pidfile /var/lock/subsys/dhcpd
+	return $RETVAL
+}
+
+restart() {
+	stop
+	start
+}
+
+# reload() {
+        # echo -n $"Reloading dhcpd: "
+        # # killproc -p $chroot_path$pidfile -b /usr/sbin/dhcpd -USR2
+        # killproc dhcpd -HUP 
+        # RETVAL=$?
+        # echo
+        # return $RETVAL
+# }
+
+case "$1" in
+  start)
+        start
+        ;;
+  stop)
+        stop
+        ;;
+  status)
+        status -p $chroot_path/$pidfile dhcpd
+        ;;
+  restart)
+        restart
+        ;;
+  condrestart)
+        [ -f /var/lock/subsys/dhcpd ] && restart || :
+        ;;
+  reload)
+        reload
+        ;;
+   configcheck)
+        configcheck
+        ;;
+  *)
+        printf "Usage: $0 {start|stop|status|restart|condrestart|configcheck}\n"
+        exit 1
+esac
+exit $?

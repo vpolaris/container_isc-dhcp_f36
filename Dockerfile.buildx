@@ -1,0 +1,112 @@
+# 
+FROM fedora:36 as builder
+ARG sysroot=/mnt/sysroot
+ARG DISTVERSION=36
+ARG DNFOPTION="--setopt=install_weak_deps=False --nodocs"
+# RUN dnf makecache  && dnf -y update
+RUN dnf -y --installroot=${sysroot} ${DNFOPTION} --releasever ${DISTVERSION} install glibc setup shadow-utils
+
+
+RUN ls ${sysroot}
+
+RUN yes | rm -f ${sysroot}/dev/null \
+    &&mknod -m 600 ${sysroot}/dev/initctl p \
+    && mknod -m 666 ${sysroot}/dev/full c 1 7 \
+    && mknod -m 666 ${sysroot}/dev/null c 1 3 \
+    && mknod -m 666 ${sysroot}/dev/ptmx c 5 2 \
+    && mknod -m 666 ${sysroot}/dev/random c 1 8 \
+    && mknod -m 666 ${sysroot}/dev/tty c 5 0 \
+    && mknod -m 666 ${sysroot}/dev/tty0 c 4 0 \
+    && mknod -m 666 ${sysroot}/dev/urandom c 1 9
+
+
+#dhcpd prerequisites
+RUN dnf -y --installroot=${sysroot} ${DNFOPTION} --setopt=arch="$(uname -m)" --releasever ${DISTVERSION} install coreutils cyrus-sasl-lib keyutils-libs krb5-libs libcap libcom_err libevent libgcrypt libgpg-error libstdc++ libzstd lz4-libs p11-kit openssl-libs openldap procps-ng util-linux xz-libs zlib
+RUN dnf -y --installroot=${sysroot} ${DNFOPTION} --setopt=arch="$(uname -m)" --releasever ${DISTVERSION} install --downloadonly --downloaddir=./ gnutls dhcp-server initscripts
+
+
+RUN ARCH="$(uname -m)"\
+    && TLSRPM="$(ls gnutls*${ARCH}.rpm)" \
+    && rpm -ivh --root=${sysroot}  --nodeps --excludedocs ${TLSRPM}
+
+
+
+#install dhcpd
+RUN ARCH="$(uname -m)" \
+    && DHCPRPM="$(ls dhcp-server*${ARCH}.rpm)" \
+    && DHCPVERSION=$(sed -e "s/dhcp-server-\(.*\)\.${ARCH}.rpm/\1/" <<< $DHCPRPM) \
+    && chroot ${sysroot} groupadd -g 1524 dhcpd \
+    && chroot ${sysroot} useradd -d /var/lib/dhcpd -c 'dhcpd daemon' -s /bin/false -g 1524 -u 1524 dhcpd \
+    && rpm -ivh --root=${sysroot}  --nodeps --excludedocs --noscripts ${DHCPRPM} \
+    && chroot ${sysroot} chown -R 1524 /var/lib/dhcpd \
+    && chroot ${sysroot} chown -R 1524 /etc/dhcp  \
+    && chroot ${sysroot} chown -R 1524 /usr/sbin/dhcpd \
+    && printf ${DHCPVERSION} > ${sysroot}/dhcpd.version
+
+#define dhcpd jail
+RUN mkdir -p ${sysroot}/isc-dhcpd/{etc,leasing,log}
+
+COPY "./dhcpd.conf" "${sysroot}/isc-dhcpd/etc/dhcpd.conf"
+
+RUN touch ${sysroot}/isc-dhcpd/leasing/dhcpd.leases \
+    && touch ${sysroot}/isc-dhcpd/log/dhcp.log \
+    && chroot ${sysroot} chown -R 1524 /isc-dhcpd
+ 
+COPY "./isc-dhcpd.service" "${sysroot}/etc/rc.d/init.d/isc-dhcpd.service"
+COPY "./entrypoint.sh" "${sysroot}/bin/entrypoint.sh"
+
+RUN chroot ${sysroot} chmod u+x  /etc/rc.d/init.d/isc-dhcpd.service /bin/entrypoint.sh
+
+
+RUN cat << EOF | tee ${sysroot}/etc/sysconfig/network \
+    NETWORKING=yes \
+    HOSTNAME=localhost.localdomain\
+    EOF
+
+#clean up
+RUN dnf -y --installroot=${sysroot} ${DNFOPTION} --releasever ${DISTVERSION} remove shadow-utils \
+    && dnf -y --installroot=${sysroot} ${DNFOPTION} --releasever ${DISTVERSION} remove util-linux-core --skip-broken
+    
+RUN ARCH="$(uname -m)" \
+    && INITRPM="$(ls initscripts*${ARCH}.rpm)" \
+    && rpm -ivh --root=${sysroot}  --nodeps --excludedocs ${INITRPM}
+    
+RUN dnf -y --installroot=${sysroot} ${DNFOPTION} --releasever ${DISTVERSION}  autoremove \    
+    && dnf -y --installroot=${sysroot} ${DNFOPTION} --releasever ${DISTVERSION}  clean all \
+    && rm -rf ${sysroot}/usr/{{lib,share}/locale,{lib,lib64}/gconv,bin/localedef,sbin/build-locale-archive} \
+#  docs and man pages       
+    && rm -rf ${sysroot}/usr/share/{man,doc,info,gnome/help} \
+#  purge log files
+    && rm -f ${sysroot}/var/log/* \
+#  cracklib
+    && rm -rf ${sysroot}/usr/share/cracklib \
+#  i18n
+    && rm -rf ${sysroot}/usr/share/i18n \
+#  dnf cache
+    && rm -rf ${sysroot}/var/cache/dnf/ \
+    && mkdir -p --mode=0755 ${sysroot}/var/cache/dnf/ \
+    && rm -f ${sysroot}//var/lib/dnf/history.* \
+#  sln
+    && rm -rf ${sysroot}/sbin/sln \
+#  ldconfig
+    && rm -rf ${sysroot}/etc/ld.so.cache ${sysroot}/var/cache/ldconfig \
+    && mkdir -p --mode=0755 ${sysroot}/var/cache/ldconfig
+
+FROM scratch 
+ARG sysroot=/mnt/sysroot
+COPY --from=builder ${sysroot} /
+ENV TINI_VERSION v0.19.0
+ADD https://github.com/krallin/tini/releases/download/${TINI_VERSION}/tini /tini
+RUN chmod +x /tini
+ENV DISTTAG=f36container FGC=f36 FBR=f36 container=podman
+ENV DISTRIB_ID fedora
+ENV DISTRIB_RELEASE 36
+ENV PLATFORM_ID "platform:f36"
+ENV DISTRIB_DESCRIPTION "Fedora 36 Container"
+ENV TZ UTC
+ENV LANG C.UTF-8
+ENV TERM xterm
+ENV IPOPT=-4
+ENTRYPOINT ["./tini", "--", "/bin/entrypoint.sh", "start"]
+
+EXPOSE 67/udp
